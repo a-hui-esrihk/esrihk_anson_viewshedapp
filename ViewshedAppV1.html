@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
+    <title>Viewshed with Observer Z Label</title>
+    <style>
+      html,
+      body,
+      #sceneview {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+      }
+
+      arcgis-scene {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+      }
+
+      header {
+        position: relative;
+        top: 0;
+        left: 0;
+        width: 100%;
+        background-color: #004874;
+        color: white;
+        padding: 0.75rem 1rem;
+        font-size: 1.25rem;
+        font-weight: bold;
+        z-index: 1000;
+      }
+
+      #previewContainer {
+        pointer-events: none;
+        width: 400px;
+        height: 250px;
+        position: absolute;
+        bottom: 25px;
+        right: 10px;
+        border: 1px solid dimgrey;
+        background-color: white;
+      }
+
+      #viewshedControls {
+        position: absolute;
+        width: 280px;
+        right: 20px;
+        top: 80px; /* Adjusted to be below the header */
+        padding: 10px;
+      }
+
+      #promptText {
+        margin-top: 0.5rem;
+      }
+
+      .spacer {
+        margin-top: 1rem;
+      }
+
+      calcite-input[readonly] {
+        background-color: #f5f5f5;
+        border: 1px solid #ccc;
+      }
+
+      /* Hide number input arrows */
+      input[type="number"]::-webkit-inner-spin-button,
+      input[type="number"]::-webkit-outer-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+      }
+
+      input[type="number"] {
+        -moz-appearance: textfield;
+      }
+    </style>
+
+    <script type="module" src="https://js.arcgis.com/calcite-components/3.0.3/calcite.esm.js"></script>
+    <link rel="stylesheet" href="https://js.arcgis.com/4.32/esri/themes/light/main.css" />
+    <script src="https://js.arcgis.com/4.32/"></script>
+    <script type="module" src="https://js.arcgis.com/map-components/4.32/arcgis-map-components.esm.js"></script>
+  </head>
+
+  <body>
+    <!-- New header -->
+    <header>Esri Hong Kong</header>
+
+    <arcgis-scene id="sceneview" item-id="de397ac7c24240ec920ead9b44e23ac0">
+      <arcgis-zoom position="top-left"></arcgis-zoom>
+      <arcgis-navigation-toggle position="top-left"></arcgis-navigation-toggle>
+      <arcgis-compass position="top-left"></arcgis-compass>
+    </arcgis-scene>
+
+    <div id="previewContainer"></div>
+
+    <calcite-card id="viewshedControls">
+      <calcite-button id="createButton" width="full">Create viewshed</calcite-button>
+      <calcite-button id="cancelButton" width="full" style="display: none">Cancel</calcite-button>
+
+      <div id="promptText" style="display: none">
+        <em>Click in the scene to place the observer point and set the target.</em>
+      </div>
+
+      <div class="spacer"></div>
+
+      <!-- Z-value Display -->
+      <calcite-label layout="inline">
+        Observer Z-value (meters)
+        <calcite-input id="zValueBox" type="number" readonly number-button-type="none" disabled></calcite-input>
+      </calcite-label>
+
+      <div class="spacer"></div>
+
+      <calcite-label layout="inline-space-between" id="limitFOV">
+        Limit maximum field of view
+        <calcite-switch checked id="limitFOVSwitch"></calcite-switch>
+      </calcite-label>
+    </calcite-card>
+
+    <!-- Original <script> block continues here... -->
+    <!-- No change to JavaScript needed for this update -->
+
+    <script>
+      require([
+        "esri/WebScene",
+        "esri/config",
+        "esri/Camera",
+        "esri/views/SceneView",
+        "esri/analysis/ViewshedAnalysis",
+        "esri/analysis/Viewshed",
+        "esri/geometry/SpatialReference",
+        "esri/core/promiseUtils",
+        "esri/core/reactiveUtils",
+        "esri/layers/GraphicsLayer",
+        "esri/Graphic",
+        "esri/symbols/TextSymbol"
+      ], (
+        WebScene,
+        esriConfig,
+        Camera,
+        SceneView,
+        ViewshedAnalysis,
+        Viewshed,
+        SpatialReference,
+        promiseUtils,
+        reactiveUtils,
+        GraphicsLayer,
+        Graphic,
+        TextSymbol
+      ) => {
+        esriConfig.apiKey = "AAPTxy8BH1VEsoebNVZXo8HurJNNSxmkHz7l6lkAS9vtVCY30HxUF-EUvB8BlPrl_kYeFznbjqVTAGfO9v28fKkS_RczqiKTEsdwK-kL-M_S6mTEnR4ONOk1-8LSC_kL2qyES6jGUODi0MlbHsRcsr12EfUTFGwqD7Ensxo3LXd9bBkGDVb4UYjhvPa2JuZADmVBSib_4AlyVOfa56215s9DRUnBuWLnNfHEJfP-BvMRY5xLlxhHmqJ6cXdSU2H7rqhmAT1_VQnvz445";
+
+        const sceneElement = document.getElementById("sceneview");
+        const zLabelLayer = new GraphicsLayer();
+        const zValueBox = document.getElementById("zValueBox");
+
+        sceneElement.addEventListener("arcgisViewReadyChange", () => {
+          const view = sceneElement.view;
+          view.map.add(zLabelLayer);
+
+          view.when(async () => {
+            const viewshedAnalysis = new ViewshedAnalysis();
+            view.analyses.add(viewshedAnalysis);
+
+            const programaticViewshed = new Viewshed({
+              observer: {
+                spatialReference: SpatialReference.WebMercator,
+                x: -9754426,
+                y: 5143111,
+                z: 330
+              },
+              farDistance: 900,
+              tilt: 84,
+              heading: 63,
+              horizontalFieldOfView: 85,
+              verticalFieldOfView: 60
+            });
+
+            viewshedAnalysis.viewsheds.add(programaticViewshed);
+
+            let creatingStarted = false;
+            let viewshedCounter = viewshedAnalysis.viewsheds.length;
+            const analysisView = await view.whenAnalysisView(viewshedAnalysis);
+            analysisView.interactive = true;
+            analysisView.selectedViewshed = programaticViewshed;
+
+            const createButton = document.getElementById("createButton");
+            const cancelButton = document.getElementById("cancelButton");
+            const promptText = document.getElementById("promptText");
+            const limitFOVSwitch = document.getElementById("limitFOVSwitch");
+
+            let abortController = null;
+
+            createButton.addEventListener("click", () => startCreating());
+            cancelButton.addEventListener("click", () => stopCreating());
+
+            reactiveUtils.when(
+              () => viewshedAnalysis.viewsheds.length > viewshedCounter && analysisView.selectedViewshed,
+              () => stopCreating()
+            );
+
+            window.addEventListener("dblclick", () => {
+              if (creatingStarted && viewshedAnalysis.viewsheds.length === viewshedCounter) {
+                startCreating();
+              }
+            });
+
+            view.on("key-down", (event) => {
+              if (event.key === "Escape") {
+                stopCreating();
+              }
+            });
+
+            // Watch observer Z value dynamically
+            reactiveUtils.watch(
+              () => analysisView?.selectedViewshed?.observer?.z,
+              (z) => {
+                if (z != null) {
+                  zValueBox.value = z.toFixed(2);
+                  updateZLabel(analysisView.selectedViewshed);
+                }
+              }
+            );
+
+            function updateZLabel(viewshed) {
+              zLabelLayer.removeAll();
+              if (!viewshed || !viewshed.observer) {
+                zValueBox.value = "";
+                return;
+              }
+
+              const z = viewshed.observer.z?.toFixed(2);
+              if (z == null) {
+                zValueBox.value = "";
+                return;
+              }
+
+              const label = new Graphic({
+                geometry: viewshed.observer,
+                symbol: new TextSymbol({
+                  text: `Z: ${z} m`,
+                  color: "black",
+                  haloColor: "white",
+                  haloSize: 1,
+                  font: { size: 14, weight: "bold" },
+                  yoffset: 20
+                })
+              });
+
+              zLabelLayer.add(label);
+            }
+
+            function startCreating() {
+              stopCreating();
+              creatingStarted = true;
+              abortController = new AbortController();
+              updateUI();
+
+              analysisView
+                .createViewsheds({ signal: abortController.signal })
+                .catch((e) => {
+                  if (!promiseUtils.isAbortError(e)) throw e;
+                })
+                .finally(updateUI);
+            }
+
+            function stopCreating() {
+              abortController?.abort();
+              abortController = null;
+              creatingStarted = false;
+              viewshedCounter = viewshedAnalysis.viewsheds.length;
+              updateUI();
+            }
+
+            function updateUI() {
+              const creating = abortController != null;
+              createButton.style.display = creating ? "none" : "flex";
+              cancelButton.style.display = creating ? "flex" : "none";
+              promptText.style.display = creating ? "block" : "none";
+              limitFOVSwitch.disabled = !analysisView.selectedViewshed;
+            }
+
+            function checkFOV() {
+              const vs = analysisView?.selectedViewshed;
+              if (!vs || !limitFOVSwitch.checked) return;
+              if (vs.horizontalFieldOfView > 120) vs.horizontalFieldOfView = 120;
+              if (vs.verticalFieldOfView > 90) vs.verticalFieldOfView = 90;
+            }
+
+            limitFOVSwitch.addEventListener("calciteSwitchChange", checkFOV);
+
+            reactiveUtils.watch(() => {
+              const vs = analysisView?.selectedViewshed;
+              return vs ? [vs.horizontalFieldOfView, vs.verticalFieldOfView] : null;
+            }, checkFOV);
+
+            const previewContainer = document.getElementById("previewContainer");
+            initializePreview(previewContainer, view, programaticViewshed, analysisView);
+          });
+        });
+
+        function initializePreview(container, view, viewshed, analysisView) {
+          const previewElement = document.createElement("arcgis-scene");
+          previewElement.map = view.map;
+
+          previewElement.addEventListener("arcgisViewReadyChange", () => {
+            const previewView = previewElement.view;
+            previewView.camera = getCameraFromViewshed(viewshed);
+            previewView.environment = view.environment;
+            previewView.ui.components = [];
+
+            reactiveUtils.when(() => {
+              const vs = analysisView.selectedViewshed;
+              return vs ? getCameraFromViewshed(vs) : null;
+            }, (camera) => {
+              previewView.camera = camera;
+            });
+          });
+
+          container.appendChild(previewElement);
+        }
+
+        function getCameraFromViewshed(vs) {
+          return new Camera({
+            position: vs.observer,
+            heading: vs.heading,
+            tilt: vs.tilt,
+            fov: getDiagonal(vs.verticalFieldOfView, vs.horizontalFieldOfView)
+          });
+        }
+
+        function getDiagonal(a, b) {
+          return Math.sqrt(a ** 2 + b ** 2);
+        }
+      });
+    </script>
+  </body>
+</html>
