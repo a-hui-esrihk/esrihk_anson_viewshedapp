@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no"/>
+<title>EsriHK • Viewshed Player – preview hides path layer</title>
+
+<link rel="stylesheet" href="https://js.arcgis.com/4.32/esri/themes/light/main.css"/>
+<script src="https://js.arcgis.com/4.32/"></script>
+
+<script type="module" src="https://js.arcgis.com/calcite-components/3.0.3/calcite.esm.js"></script>
+<script type="module" src="https://js.arcgis.com/map-components/4.32/arcgis-map-components.esm.js"></script>
+
+<style>
+  html,body,#sceneview{margin:0;padding:0;width:100%;height:100%}
+  arcgis-scene{position:absolute;inset:0}
+  header{background:#004874;color:#fff;font:bold 1.25rem/1.2 system-ui,sans-serif;padding:.75rem 1rem;z-index:1000}
+
+  #previewContainer{pointer-events:none;width:500px;height:350px;position:absolute;bottom:25px;right:10px;
+                    border:1px solid dimgrey;background:#fff}
+  #toolPanel{position:absolute;top:80px;right:20px;width:310px;padding-inline:10px}
+  .spacer{margin-top:.75rem}
+
+  calcite-input[readonly]{background:#f5f5f5}
+  input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{display:none}
+  input[type=number]{-moz-appearance:textfield}
+
+  .slider-row{display:flex;align-items:center;gap:.5rem}
+  .slider-row calcite-slider{flex:1}
+  .slider-caption{white-space:nowrap;font:14px/1.3 system-ui,sans-serif}
+
+  #sunlightToggle{position:absolute;bottom:20px;left:12px;z-index:1100}
+  arcgis-daylight{position:absolute;bottom:60px;left:12px;display:none}
+</style>
+</head>
+
+<body>
+<header>Esri Hong Kong • Viewshed Player</header>
+
+<!-- —— MAIN SCENE —— -->
+<arcgis-scene id="sceneview" item-id="e567e58357dc49e5884de09ead334169">
+  <arcgis-zoom              position="top-left"></arcgis-zoom>
+  <arcgis-navigation-toggle position="top-left"></arcgis-navigation-toggle>
+  <arcgis-compass           position="top-left"></arcgis-compass>
+</arcgis-scene>
+
+<arcgis-daylight id="daylightWidget"></arcgis-daylight>
+<calcite-button id="sunlightToggle" scale="s">Sunlight</calcite-button>
+
+<div id="previewContainer"></div>
+
+<!-- —— TOOL PANEL —— -->
+<calcite-card id="toolPanel">
+  <calcite-button id="playBtn" width="full" appearance="solid" color="green" disabled>
+    ▶ Play path
+  </calcite-button>
+
+  <div class="spacer"></div>
+  <calcite-label layout="inline">
+    Observer Z (m)
+    <calcite-input id="zBox" type="number" readonly number-button-type="none"></calcite-input>
+  </calcite-label>
+
+  <div class="spacer"></div>
+  <calcite-label layout="inline">
+    Far distance (m)
+    <calcite-input id="farIn" type="number" value="20" step="10"></calcite-input>
+  </calcite-label>
+
+  <calcite-label layout="inline" class="spacer">
+    Step (m)
+    <calcite-input id="stepIn" type="number" value="0.25" step="0.1" min="0.1"></calcite-input>
+  </calcite-label>
+
+  <div class="spacer slider-row">
+    <span class="slider-caption">Tilt (<span id="tiltD">90</span>°)</span>
+    <calcite-slider id="tiltS" min="0" max="90" step="1" value="90"></calcite-slider>
+  </div>
+  <div class="slider-row">
+    <span class="slider-caption">Heading (<span id="headD">0</span>°)</span>
+    <calcite-slider id="headS" min="-180" max="180" step="1" value="0"></calcite-slider>
+  </div>
+
+  <div class="spacer"></div>
+  <calcite-label layout="inline">
+    Horizontal FOV (°)
+    <calcite-input id="hFOV" type="number" value="85" step="1" min="1" max="120"></calcite-input>
+  </calcite-label>
+  <calcite-label layout="inline">
+    Vertical FOV (°)
+    <calcite-input id="vFOV" type="number" value="60" step="1" min="1" max="90"></calcite-input>
+  </calcite-label>
+</calcite-card>
+
+<!-- —— SCRIPT —— -->
+<script>
+require([
+  "esri/config","esri/Camera","esri/views/SceneView",
+  "esri/analysis/ViewshedAnalysis","esri/analysis/Viewshed",
+  "esri/core/reactiveUtils","esri/layers/GraphicsLayer",
+  "esri/layers/FeatureLayer","esri/symbols/SimpleLineSymbol",
+  "esri/geometry/Polyline","esri/Graphic"
+],(
+  esriConfig,Camera,SceneView,
+  ViewshedAnalysis,Viewshed,
+  reactiveUtils,GraphicsLayer,
+  FeatureLayer,SimpleLineSymbol,
+  Polyline,Graphic
+)=>{
+  esriConfig.apiKey =
+    "AAPTxy8BH1VEsoebNVZXo8HurJNNSxmkHz7l6lkAS9vtVCaPrUh2SM8clkd4Yla7G6Oh8sU0hfNVmcdrz_INhuZHF6MCwtYZOkneeRM56gUgabDjO1E5R4-uhsbhBP35-OKHszJFOFTxAciE5_TTmZR-qxvVxVRauVuG1V8QKk5_gsGQmEhw6y3kUTrvezLZ42dQQeqjVtwlIfjtbwLBIOmbAa3Nr79bh7nJq0B_Dt18zWvUm3OcaYpVd6_-j6e98GBfAT1_x2J6QSeS";
+
+  const sceneEl=document.getElementById("sceneview"), sunBtn=document.getElementById("sunlightToggle"),
+        dayW=document.getElementById("daylightWidget"), playBtn=document.getElementById("playBtn");
+
+  const stepIn=document.getElementById("stepIn"), farIn=document.getElementById("farIn"),
+        tiltS=document.getElementById("tiltS"), headS=document.getElementById("headS"),
+        hFOV=document.getElementById("hFOV"), vFOV=document.getElementById("vFOV"),
+        tiltD=document.getElementById("tiltD"), headD=document.getElementById("headD"),
+        zBox=document.getElementById("zBox");
+
+  sunBtn.onclick=()=>dayW.style.display=dayW.style.display==="none"?"block":"none";
+
+  const FRAME_MS=50, PATH_LAYER_ID="ec0b0d555753402eb59969568efa5afc";
+
+  sceneEl.addEventListener("arcgisViewReadyChange",()=>{
+    const view=sceneEl.view; dayW.view=view;
+
+    const lineLayer=new GraphicsLayer(); view.map.add(lineLayer);
+
+    const pathLayer=new FeatureLayer({portalItem:{id:PATH_LAYER_ID},outFields:["*"]});
+    view.map.add(pathLayer);
+
+    const vsAnal=new ViewshedAnalysis(); view.analyses.add(vsAnal);
+
+    let lineG=null,vs=null,pts=[],idx=0,timer=null,state="idle";
+    let visitedG=null,remainG=null;
+
+    function updateBtn(){
+      playBtn.textContent=state==="playing"?"❚❚ Pause":state==="idle"?"▶ Play path":"▶ Resume";
+      playBtn.color=state==="playing"?"red":"green";
+      playBtn.disabled=!lineG;
+    }
+
+    function syncVS(){ if(!vs) return;
+      vs.farDistance=+farIn.value; vs.tilt=+tiltS.value; vs.heading=+headS.value;
+      vs.horizontalFieldOfView=+hFOV.value; vs.verticalFieldOfView=+vFOV.value;
+    }
+    [farIn,hFOV,vFOV].forEach(el=>el.addEventListener("calciteInputInput",syncVS));
+    tiltS.addEventListener("calciteSliderInput",()=>{tiltD.textContent=tiltS.value;syncVS();});
+    headS.addEventListener("calciteSliderInput",()=>{headD.textContent=headS.value;syncVS();});
+
+    reactiveUtils.watch(()=>{const v=vsAnal.viewsheds.getItemAt(0);return v?[v.observer?.z]:[null];},
+      ()=>{const v=vsAnal.viewsheds.getItemAt(0);zBox.value=v?.observer?.z?.toFixed(2)||"";},{initial:true});
+
+    function densify3D(poly,step){
+      const sr=poly.spatialReference,out=[];
+      for(const path of poly.paths){
+        for(let i=0;i<path.length-1;i++){
+          const [ax,ay,az=0]=path[i], [bx,by,bz=0]=path[i+1];
+          out.push({x:ax,y:ay,z:az,spatialReference:sr});
+          const len=Math.hypot(bx-ax,by-ay); if(len<=step) continue;
+          const n=Math.floor(len/step);
+          for(let j=1;j<n;j++){
+            const t=j*step/len; out.push({x:ax+(bx-ax)*t,y:ay+(by-ay)*t,z:az+(bz-az)*t,spatialReference:sr});
+          }
+        }
+        const [lx,ly,lz=0]=path[path.length-1]; out.push({x:lx,y:ly,z:lz,spatialReference:sr});
+      }
+      return out;
+    }
+    const headingFrom=v=>v.length<2?0:(Math.atan2(v[1][0]-v[0][0],v[1][1]-v[0][1])*180/Math.PI+360)%360;
+
+    function updateSplit(){
+      if(!visitedG||!remainG) return;
+      const sr=lineG.geometry.spatialReference,
+            mk=a=>new Polyline({paths:[a.map(p=>[p.x,p.y,p.z])],spatialReference:sr,hasZ:true});
+      visitedG.geometry=idx>1?mk(pts.slice(0,idx)):null;
+      remainG.geometry =idx<pts.length-1?mk(pts.slice(idx-1)):null;
+    }
+
+    function initVS(){
+      const first=lineG.geometry.paths[0][0];
+      vsAnal.viewsheds.removeAll();
+      vs=new Viewshed({observer:{x:first[0],y:first[1],z:first[2]??0,spatialReference:lineG.geometry.spatialReference}});
+      vs.heading=headingFrom(lineG.geometry.paths[0]); syncVS(); vsAnal.viewsheds.add(vs);
+    }
+
+    function usePath(f){
+      stop(); lineLayer.removeAll(); lineG=f.clone();
+      const sr=lineG.geometry.spatialReference;
+      visitedG=new Graphic({geometry:new Polyline({paths:[],spatialReference:sr,hasZ:true}),
+                            elevationInfo:{mode:"relative-to-scene"},
+                            symbol:new SimpleLineSymbol({color:"rgba(0,255,0,5)",width:9})});
+      remainG=new Graphic({geometry:lineG.geometry,
+                           elevationInfo:{mode:"relative-to-scene"},
+                           symbol:new SimpleLineSymbol({color:"rgba(255,102,0,5)",width:9})});
+      lineLayer.addMany([visitedG,remainG]); initVS(); updateBtn();
+    }
+
+    playBtn.onclick=()=>state==="idle"?start():state==="playing"?pause():resume();
+    function start(){pts=densify3D(lineG.geometry,+stepIn.value||1); idx=0; updateSplit();
+      state="playing"; updateBtn(); timer=setInterval(frame,FRAME_MS);}
+    function frame(){if(idx>=pts.length){updateSplit();stop();return;} vs.observer=pts[idx++]; updateSplit();}
+    function pause(){clearInterval(timer); state="paused"; updateBtn();}
+    function resume(){state="playing"; updateBtn(); timer=setInterval(frame,FRAME_MS);}
+    function stop(){clearInterval(timer); state="idle"; updateBtn();}
+
+    stepIn.addEventListener("calciteInputInput",()=>{
+      if(!lineG)return; const p=pts.length?idx/pts.length:0;
+      pts=densify3D(lineG.geometry,+stepIn.value||1); idx=Math.min(Math.floor(p*pts.length),pts.length-1); updateSplit(); });
+
+    view.on("click",async e=>{
+      const q=pathLayer.createQuery(); q.geometry=view.toMap(e); if(!q.geometry) return;
+      q.distance=5; q.units="meters"; q.returnGeometry=q.returnZ=true;
+      try{const res=await pathLayer.queryFeatures(q); if(res.features.length) usePath(res.features[0]);}
+      catch(err){console.error(err);}
+    });
+
+    buildPreview(vsAnal);
+    function buildPreview(an){
+      const box=document.getElementById("previewContainer"), mini=document.createElement("arcgis-scene");
+      mini.setAttribute("item-id","e567e58357dc49e5884de09ead334169"); box.appendChild(mini);
+
+      mini.addEventListener("arcgisViewReadyChange",()=>{
+        const pv=mini.view; pv.environment=view.environment; pv.ui.components=[];
+
+        /* —— hide path layer only in preview —— */
+        const hideLayer=pv.map.allLayers.find(l=>l.portalItem?.id===PATH_LAYER_ID);
+        if(hideLayer) hideLayer.visible=false;
+
+        reactiveUtils.watch(()=>an.viewsheds.getItemAt(0),v=>{
+          if(!v)return;
+          const upd=()=>pv.camera=new Camera({position:v.observer,heading:v.heading,tilt:v.tilt,
+                           fov:Math.hypot(v.horizontalFieldOfView,v.verticalFieldOfView)});
+          upd();
+          reactiveUtils.watch(()=>[v.observer,v.heading,v.tilt,v.horizontalFieldOfView,v.verticalFieldOfView],
+                               upd,{initial:true});
+        },{initial:true});
+      });
+    }
+
+    updateBtn(); window.addEventListener("blur",pause);
+  });
+});
+</script>
+</body>
+</html>
