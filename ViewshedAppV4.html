@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no"/>
+<title>Esri HK • Viewshed Path Player (v3-11 — green trail for travelled path)</title>
+
+<!-- ArcGIS JS API -->
+<link rel="stylesheet" href="https://js.arcgis.com/4.32/esri/themes/light/main.css"/>
+<script src="https://js.arcgis.com/4.32/"></script>
+
+<!-- Calcite Design System & map-components -->
+<script type="module" src="https://js.arcgis.com/calcite-components/3.0.3/calcite.esm.js"></script>
+<script type="module" src="https://js.arcgis.com/map-components/4.32/arcgis-map-components.esm.js"></script>
+
+<style>
+html,body,#sceneview{width:100%;height:100%;margin:0;padding:0}
+arcgis-scene{position:absolute;inset:0}
+header{background:#004874;color:#fff;padding:.75rem 1rem;font-size:1.25rem;font-weight:600;z-index:1000}
+
+/* preview window */
+#previewContainer{position:absolute;bottom:25px;right:10px;pointer-events:none;
+                  width:650px;height:350px;border:3px solid dimgrey;background:#fff}
+#previewContainer .mini-wrapper{width:100%;height:100%}
+
+/* control panel */
+#toolPanel{position:absolute;top:20px;left:20px;width:250px;padding-inline:5px}
+.spacer{margin-top:.5rem}
+calcite-input[readonly]{background:#82828226;border:1px solid #ccc}
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+input[type=number]{-moz-appearance:textfield}
+
+/* slider row */
+.slider-row{display:flex;align-items:center;gap:.2rem}
+.slider-row calcite-slider{flex:1}
+.slider-caption{white-space:nowrap;font:12px/1.4 system-ui,sans-serif}
+
+/* heading joystick */
+#headingDial{width:100px;height:100px;border:2px solid #555;border-radius:50%;
+             position:relative;margin:auto;cursor:grab}
+#headingDot{width:11px;height:11px;border-radius:50%;background:#0078d4;
+            position:absolute;left:50%;top:5%;transform:translate(-50%,-50%);
+            pointer-events:none;transition:left .05s linear,top .05s linear}
+
+/* quick toggles */
+#sunlightToggle{position:absolute;bottom:20px;left:12px;z-index:1100}
+#previewToggle {position:absolute;bottom:20px;left:90px;z-index:1100}
+#panelToggle  {position:absolute;bottom:20px;left:185px;z-index:1100}
+arcgis-daylight{position:absolute;bottom:60px;left:12px;display:none}
+</style>
+</head>
+
+<body>
+<header>Esri Hong Kong • Viewshed Path Player</header>
+
+<!-- 3-D scene -->
+<arcgis-scene id="sceneview" item-id="de397ac7c24240ec920ead9b44e23ac0">
+  <arcgis-zoom position="top-right"></arcgis-zoom>
+  <arcgis-navigation-toggle position="top-right"></arcgis-navigation-toggle>
+  <arcgis-compass position="top-right"></arcgis-compass>
+</arcgis-scene>
+
+<!-- daylight widget & toggles -->
+<arcgis-daylight id="daylightWidget"></arcgis-daylight>
+<calcite-button id="sunlightToggle" scale="s">Sunlight</calcite-button>
+<calcite-button id="previewToggle"  scale="s">Hide preview</calcite-button>
+<calcite-button id="panelToggle"    scale="s">Hide controls</calcite-button>
+
+<!-- mini-scene preview -->
+<div id="previewContainer"><div class="mini-wrapper"></div></div>
+
+<!-- control panel -->
+<calcite-card id="toolPanel">
+  <calcite-button id="drawPathBtn" width="full">Draw path</calcite-button>
+  <calcite-button id="editPathBtn" width="full" appearance="outline" class="spacer" disabled>Edit path</calcite-button>
+  <calcite-button id="playBtn" width="full" appearance="solid" color="green" class="spacer" disabled>▶ Play path</calcite-button>
+
+  <div class="spacer"></div>
+  <calcite-label layout="inline">Observer Z (m)
+    <calcite-input id="zValueBox" type="number" readonly number-button-type="none"></calcite-input>
+  </calcite-label>
+
+  <div class="spacer"></div>
+  <calcite-label layout="inline">Far distance (m)
+    <calcite-input id="farDistanceInput" type="number" value="900" step="10"></calcite-input>
+  </calcite-label>
+
+  <calcite-label layout="inline" class="spacer">Speed (m s⁻¹)
+    <calcite-input id="stepInput" type="number" value="1" step="0.1" min="0.1"></calcite-input>
+  </calcite-label>
+
+  <calcite-label layout="inline">Travel time
+    <calcite-input id="timeBox" type="text" value="—" readonly></calcite-input>
+  </calcite-label>
+
+  <calcite-label layout="inline">Path length (m)
+    <calcite-input id="pathLenBox" type="text" value="—" readonly></calcite-input>
+  </calcite-label>
+
+  <div class="spacer slider-row">
+    <span class="slider-caption">Tilt (<span id="tiltDisplay">0</span>°)</span>
+    <calcite-slider id="tiltSlider" min="0" max="90" step="1" value="0"></calcite-slider>
+  </div>
+
+  <div class="spacer">
+    <span class="slider-caption" style="display:block;text-align:center">
+      Heading (<span id="headingDisplay">0</span>°)
+    </span>
+    <div id="headingDial"><div id="headingDot"></div></div>
+  </div>
+
+  <div class="spacer"></div>
+  <calcite-label layout="inline">Horizontal FOV (°)
+    <calcite-input id="hFOVInput" type="number" value="85" step="1" min="1" max="120"></calcite-input>
+  </calcite-label>
+  <calcite-label layout="inline">Vertical FOV (°)
+    <calcite-input id="vFOVInput" type="number" value="60" step="1" min="1" max="90"></calcite-input>
+  </calcite-label>
+</calcite-card>
+
+<script>
+/* ─── configuration ─── */
+const FRAME       = 20;   // ms between frames
+const SPEED_BOOST = 20;    // internal playback accelerator
+
+/* ─── quick-toggle helpers ─── */
+const previewBox=document.getElementById("previewContainer"),
+      panel     =document.getElementById("toolPanel"),
+      previewBtn=document.getElementById("previewToggle"),
+      panelBtn  =document.getElementById("panelToggle");
+
+function refreshPreviewBtn(){previewBtn.textContent=previewBox.style.display==="none"?"Show preview":"Hide preview";}
+function refreshPanelBtn(){panelBtn.textContent  =panel.style.display==="none"?"Show controls":"Hide controls";}
+
+previewBtn.onclick=()=>{previewBox.style.display=previewBox.style.display==="none"?"block":"none";refreshPreviewBtn();};
+panelBtn.onclick  =()=>{panel.style.display     =panel.style.display==="none"?"block":"none";refreshPanelBtn();};
+refreshPreviewBtn();refreshPanelBtn();
+
+document.getElementById("sunlightToggle").onclick=()=>{
+  const w=document.getElementById("daylightWidget");
+  w.style.display=w.style.display==="none"?"block":"none";
+};
+
+/* ─── joystick utilities ─── */
+let curHeading=0,dragging=false,vs=null;const R=50;
+function setHeading(deg){
+  if(deg<-180)deg+=360;if(deg>180)deg-=360;curHeading=deg;
+  document.getElementById("headingDisplay").textContent=Math.round(deg);
+  if(vs)vs.heading=deg;
+  const rad=deg*Math.PI/180,x=R*Math.sin(rad),y=-R*Math.cos(rad);
+  document.getElementById("headingDot").style.cssText=`left:calc(50% + ${x}px);top:calc(50% + ${y}px)`;
+}
+
+/* ─── ArcGIS logic ─── */
+require([
+  "esri/config","esri/Camera","esri/views/SceneView",
+  "esri/analysis/ViewshedAnalysis","esri/analysis/Viewshed",
+  "esri/core/reactiveUtils","esri/layers/GraphicsLayer",
+  "esri/widgets/Sketch/SketchViewModel","esri/symbols/SimpleLineSymbol",
+  "esri/geometry/Polyline","esri/Graphic"
+],(
+  esriConfig,Camera,SceneView,
+  ViewshedAnalysis,Viewshed,
+  reactiveUtils,GraphicsLayer,
+  SketchViewModel,SimpleLineSymbol,
+  Polyline,Graphic
+)=>{
+
+  esriConfig.apiKey="AAPTxy8BH1VEsoebNVZXo8HurJNNSxmkHz7l6lkAS9vtVCY30HxUF-EUvB8BlPrl_kYeFznbjqVTAGfO9v28fKkS_RczqiKTEsdwK-kL-M_S6mTEnR4ONOk1-8LSC_kL2qyES6jGUODi0MlbHsRcsr12EfUTFGwqD7Ensxo3LXd9bBkGDVb4UYjhvPa2JuZADmVBSib_4AlyVOfa56215s9DRUnBuWLnNfHEJfP-BvMRY5xLlxhHmqJ6cXdSU2H7rqhmAT1_VQnvz445";
+
+  /* DOM refs */
+  const sceneEl=document.getElementById("sceneview"),
+        drawBtn=document.getElementById("drawPathBtn"),
+        editBtn=document.getElementById("editPathBtn"),
+        playBtn=document.getElementById("playBtn"),
+        stepIn =document.getElementById("stepInput"),
+        timeBox=document.getElementById("timeBox"),
+        pathLenBox=document.getElementById("pathLenBox"),
+        farIn  =document.getElementById("farDistanceInput"),
+        tiltS  =document.getElementById("tiltSlider"),
+        tiltD  =document.getElementById("tiltDisplay"),
+        hFOVIn =document.getElementById("hFOVInput"),
+        vFOVIn =document.getElementById("vFOVInput"),
+        zBox   =document.getElementById("zValueBox"),
+        previewWrapper=document.querySelector("#previewContainer .mini-wrapper");
+
+  /* joystick pointer handling */
+  const dial=document.getElementById("headingDial");
+  const dialPtr=e=>{
+    const r=dial.getBoundingClientRect(),
+          dx=e.clientX-(r.left+r.width/2),
+          dy=(r.top+r.height/2)-e.clientY;
+    setHeading(Math.atan2(dx,dy)*180/Math.PI);
+  };
+  dial.addEventListener("pointerdown",e=>{dragging=true;dial.setPointerCapture(e.pointerId);dialPtr(e);});
+  dial.addEventListener("pointermove",e=>{if(dragging)dialPtr(e);});
+  dial.addEventListener("pointerup",  e=>{dragging=false;dial.releasePointerCapture(e.pointerId);});
+  dial.addEventListener("pointercancel",()=>dragging=false);
+
+  /* Scene ready */
+  sceneEl.addEventListener("arcgisViewReadyChange",()=>{
+    const view=sceneEl.view;document.getElementById("daylightWidget").view=view;
+
+    /* mini-scene */
+    const mini=document.createElement("arcgis-scene");
+    mini.setAttribute("item-id","de397ac7c24240ec920ead9b44e23ac0");
+    previewWrapper.appendChild(mini);
+
+    /* layers & analyses */
+    const lineLayer=new GraphicsLayer(),
+          vsAnal   =new ViewshedAnalysis();
+    view.map.add(lineLayer);view.analyses.add(vsAnal);
+
+    /* sketch tool */
+    const sketch=new SketchViewModel({
+      view,layer:lineLayer,
+      defaultCreateOptions:{mode:"click",hasZ:true},
+      defaultUpdateOptions:{tool:"reshape"},
+      updateOnGraphicClick:false
+    });
+
+    /* state */
+    let lineG=null,traveledG=null,pts=[],idx=0,timer=null,state="idle";
+    const setBtn=()=>{
+      playBtn.textContent={idle:"▶ Play path",playing:"❚❚ Pause",paused:"▶ Resume"}[state];
+      playBtn.color=state==="playing"?"red":"green";
+      playBtn.disabled=!lineG;
+    };
+
+    /* geometry helpers */
+    const geomLen=g=>{
+      let len=0;
+      g.paths.forEach(p=>{
+        for(let i=0;i<p.length-1;i++){
+          const [x1,y1]=p[i],[x2,y2]=p[i+1];len+=Math.hypot(x2-x1,y2-y1);
+        }
+      });
+      return len;
+    };
+    const updatePathLen=()=>{pathLenBox.value=lineG?geomLen(lineG.geometry).toFixed(1):"—";};
+    const updateTime=()=>{
+      if(!lineG){timeBox.value="—";return;}
+      const speed=Math.max(+stepIn.value||0.0001,0.0001);
+      const sec=geomLen(lineG.geometry)/speed;
+      const hh=Math.floor(sec/3600),
+            mm=Math.floor((sec%3600)/60),
+            ss=Math.floor(sec%60);
+      timeBox.value=`${hh?hh+" h ":""}${mm?mm+" m ":""}${ss}s`;
+    };
+
+    /* VS sync */
+    const sync=()=>{
+      if(!vs)return;
+      vs.farDistance           =+farIn.value;
+      vs.tilt                  =+tiltS.value;
+      vs.heading               = curHeading;
+      vs.horizontalFieldOfView =+hFOVIn.value;
+      vs.verticalFieldOfView   =+vFOVIn.value;
+    };
+    [farIn,hFOVIn,vFOVIn].forEach(el=>el.addEventListener("calciteInputInput",sync));
+    tiltS.addEventListener("calciteSliderInput",()=>{tiltD.textContent=tiltS.value;sync();});
+
+    stepIn.addEventListener("calciteInputInput",()=>{
+      updateTime();reDensify(true);
+      if(vs&&pts[idx])vs.observer=pts[idx];
+    });
+
+    /* drawing */
+    drawBtn.onclick=()=>{
+      stop();lineLayer.removeAll();vsAnal.viewsheds.removeAll();
+      lineG=traveledG=vs=null;editBtn.disabled=true;
+      sketch.create("polyline");drawBtn.disabled=true;
+    };
+    sketch.on("vertex-add",e=>{
+      if(e.state!=="active")return;
+      const v=e.vertices.at(-1);if(v&&(v[2]==null||isNaN(v[2])))v[2]=90;
+    });
+    sketch.on("create",e=>{
+      if(e.state!=="complete"){return;}
+      ensureZ(e.graphic.geometry);commit(e.graphic);
+    });
+
+    /* editing */
+    editBtn.onclick=()=>{if(lineG){stop();sketch.update(lineG);}};
+    sketch.on("update",e=>{
+      if(e.tool!=="reshape")return;
+      if(e.state==="complete"){ensureZ(e.graphic.geometry);commit(e.graphic);}
+    });
+
+    /* commit */
+    function commit(g){
+      lineG=g;g.symbol=new SimpleLineSymbol({color:"rgba(255,136,0,0.5)",width:4});
+      editBtn.disabled=false;drawBtn.disabled=false;
+      initVS(true);
+      // travelled graphic
+      if(traveledG)lineLayer.remove(traveledG);
+      const p0=g.geometry.paths[0][0];
+      traveledG=new Graphic({
+        geometry:new Polyline({paths:[[[p0[0],p0[1],p0[2]]]],spatialReference:g.geometry.spatialReference}),
+        symbol:new SimpleLineSymbol({color:"rgba(0,200,0,0.8)",width:8})
+      });
+      lineLayer.add(traveledG);
+      state="idle";setBtn();updatePathLen();updateTime();reDensify(false);
+    }
+
+    /* VS initialise */
+    function initVS(reset=false){
+      const p=lineG.geometry.paths[0][0],
+            obs={x:p[0],y:p[1],z:p[2],spatialReference:lineG.geometry.spatialReference};
+      if(!vs||!reset){
+        vsAnal.viewsheds.removeAll();
+        vs=new Viewshed({observer:obs});sync();vsAnal.viewsheds.add(vs);
+      }else vs.observer=obs;
+      setHeading(headFrom(lineG.geometry.paths[0]));
+    }
+    const headFrom=p=>p.length<2?0:(Math.atan2(p[1][0]-p[0][0],p[1][1]-p[0][1])*180/Math.PI+360)%360;
+
+    /* densify */
+    function densify(geom,d){
+      const out=[],sr=geom.spatialReference;
+      geom.paths.forEach(path=>{
+        for(let i=0;i<path.length-1;i++){
+          const [ax,ay,az]=path[i],[bx,by,bz]=path[i+1],
+                dx=bx-ax,dy=by-ay,l=Math.hypot(dx,dy),n=Math.floor(l/d);
+          for(let s=0;s<=n;s++){
+            const t=s*d/l;if(t>1)continue;
+            out.push({x:ax+dx*t,y:ay+dy*t,z:az+(bz-az)*t,spatialReference:sr});
+          }
+        }
+      });
+      const last=geom.paths.at(-1).at(-1);
+      out.push({x:last[0],y:last[1],z:last[2],spatialReference:sr});
+      return out;
+    }
+    function reDensify(keepIdx){
+      if(!lineG)return;
+      const userSpd=Math.max(+stepIn.value||0.1,0.1),
+            dist   =userSpd*SPEED_BOOST*FRAME/1000;
+      const frac=keepIdx&&pts.length?idx/pts.length:0;
+      pts=densify(lineG.geometry,dist);
+      idx=Math.min(Math.floor(frac*pts.length),pts.length-1);
+    }
+
+    /* update travelled polyline */
+    function updateTravelled(){
+      if(!traveledG||!pts.length)return;
+      const path=pts.slice(0,Math.min(idx,pts.length)).map(p=>[p.x,p.y,p.z]);
+      traveledG.geometry=new Polyline({paths:[path],spatialReference:lineG.geometry.spatialReference});
+    }
+
+    /* play / pause / resume */
+    playBtn.onclick=()=>{state==="idle"?start():state==="playing"?pause():resume();};
+    const start=()=>{
+      reDensify(false);
+      if(!pts.length)return;
+      idx=0;updateTravelled();
+      state="playing";setBtn();
+      timer=setInterval(frame,FRAME);
+    };
+    const frame=()=>{
+      if(idx>=pts.length){stop();return;}
+      vs.observer=pts[idx++];
+      updateTravelled();
+    };
+    const pause=()=>{clearInterval(timer);state="paused";setBtn();};
+    const resume=()=>{state="playing";setBtn();timer=setInterval(frame,FRAME);};
+    const stop =()=>{
+      clearInterval(timer);
+      idx=pts.length;updateTravelled();      // ensure whole path appears green on finish
+      state="idle";setBtn();
+    };
+
+    /* Z read-out */
+    reactiveUtils.watch(()=>{const v=vsAnal.viewsheds.getItemAt(0);return v?[v.observer?.z]:[null];},
+      ()=>{const v=vsAnal.viewsheds.getItemAt(0);zBox.value=v?.observer?.z!=null?(+v.observer.z).toFixed(2):"";});
+
+    /* preview sync */
+    mini.addEventListener("arcgisViewReadyChange",()=>{
+      const pv=mini.view;pv.environment=view.environment;pv.ui.components=[];
+      reactiveUtils.watch(()=>vsAnal.viewsheds.getItemAt(0),v=>{
+        if(!v)return;
+        const upd=()=>pv.camera=new Camera({
+          position:v.observer,heading:v.heading,tilt:v.tilt,
+          fov:Math.hypot(v.horizontalFieldOfView,v.verticalFieldOfView)
+        });
+        upd();
+        reactiveUtils.watch(()=>[v.observer,v.heading,v.tilt,v.horizontalFieldOfView,v.verticalFieldOfView],upd,{initial:true});
+      },{initial:true});
+    });
+
+    /* misc */
+    const ensureZ=g=>g.paths.forEach(p=>p.forEach(v=>{if(v[2]==null||isNaN(v[2]))v[2]=90;}));
+    window.addEventListener("blur",pause);
+
+    /* ready */
+    setHeading(0);setBtn();
+  });
+});
+</script>
+</body>
+</html>
